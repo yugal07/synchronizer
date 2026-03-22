@@ -112,9 +112,7 @@ func (p *FeaturesProvider) refreshAccount(account, accessKey string) {
 		return
 	}
 
-	if val, ok := p.cache.Load(account); ok {
-		val.(*cachedAccount).features = features
-	}
+	p.cache.Store(account, &cachedAccount{accessKey: accessKey, features: features})
 }
 
 type featuresResponse struct {
