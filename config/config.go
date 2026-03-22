@@ -33,6 +33,7 @@ type Backend struct {
 	ReconciliationTask   *ReconciliationTaskConfig   `mapstructure:"reconciliationTaskConfig"`
 	KeepAliveTask        *KeepAliveTaskConfig        `mapstructure:"keepAliveTaskConfig"`
 	SkipAlertsFrom       []string                    `mapstructure:"skipAlertsFrom"`
+	FeaturesProvider     *FeaturesProviderConfig     `mapstructure:"featuresProvider"`
 }
 
 type InCluster struct {
@@ -78,6 +79,11 @@ type ReconciliationTaskConfig struct {
 
 type KeepAliveTaskConfig struct {
 	TaskIntervalSeconds int `mapstructure:"taskIntervalSeconds"`
+}
+
+type FeaturesProviderConfig struct {
+	FeatureFlagName        string `mapstructure:"featureFlagName"`
+	RefreshIntervalSeconds int    `mapstructure:"refreshIntervalSeconds"`
 }
 
 // Kind returns group/version/resource as a string.

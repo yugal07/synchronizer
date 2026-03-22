@@ -25,17 +25,36 @@ type Adapter struct {
 
 	connMapMutex   sync.RWMutex
 	connectionMap  map[string]domain.ClientIdentifier // <cluster, account> -> <connection string>
-	producer       messaging.MessageProducer
-	mainContext    context.Context
-	skipAlertsFrom []string
+	producer            messaging.MessageProducer
+	mainContext         context.Context
+	skipAlertsFrom      []string
+	featuresProvider    *FeaturesProvider
 }
 
 func NewBackendAdapter(mainContext context.Context, messageProducer messaging.MessageProducer, cfg config.Backend) *Adapter {
+	var featuresProvider *FeaturesProvider
+	featuresURL := ""
+	if cfg.AuthenticationServer != nil {
+		featuresURL = cfg.AuthenticationServer.Url
+	}
+	if cfg.FeaturesProvider != nil && cfg.FeaturesProvider.FeatureFlagName != "" && featuresURL == "" {
+		logger.L().Warning("featuresProvider is configured but authentication server URL is empty — provider will be disabled")
+	}
+	if cfg.FeaturesProvider != nil && featuresURL != "" && cfg.FeaturesProvider.FeatureFlagName != "" {
+		featuresProvider = NewFeaturesProvider(featuresURL, cfg.FeaturesProvider.FeatureFlagName)
+		refreshInterval := time.Duration(cfg.FeaturesProvider.RefreshIntervalSeconds) * time.Second
+		featuresProvider.StartRefreshLoop(mainContext, refreshInterval)
+		logger.L().Info("features provider initialized",
+			helpers.String("url", featuresURL),
+			helpers.String("flagName", cfg.FeaturesProvider.FeatureFlagName))
+	}
+
 	adapter := &Adapter{
-		producer:       messageProducer,
-		mainContext:    mainContext,
-		connectionMap:  make(map[string]domain.ClientIdentifier),
-		skipAlertsFrom: cfg.SkipAlertsFrom,
+		producer:         messageProducer,
+		mainContext:      mainContext,
+		connectionMap:    make(map[string]domain.ClientIdentifier),
+		skipAlertsFrom:   cfg.SkipAlertsFrom,
+		featuresProvider: featuresProvider,
 	}
 
 	adapter.startReconciliationPeriodicTask(mainContext, cfg.ReconciliationTask)
@@ -120,7 +139,13 @@ func (b *Adapter) Start(ctx context.Context) error {
 	}
 	b.connectionMap[incomingId.String()] = incomingId
 
-	client := NewClient(b.producer, b.skipAlertsFrom)
+	if b.featuresProvider != nil {
+		if accessKey := utils.AccessKeyFromContext(ctx); accessKey != "" {
+			b.featuresProvider.RegisterAccount(incomingId.Account, accessKey)
+		}
+	}
+
+	client := NewClient(b.producer, b.skipAlertsFrom, b.featuresProvider)
 	// increment connected clients gauge, only if client was not found
 	if !b.clientsMap.Has(incomingId.String()) {
 		connectedClientsGauge.Inc()
@@ -175,6 +200,20 @@ func (b *Adapter) Stop(ctx context.Context) error {
 			prometheusClusterLabel: toDelete.Cluster,
 			prometheusAccountLabel: toDelete.Account,
 		}).Inc()
+	}
+
+	// unregister account from features provider if no other connections share it
+	if b.featuresProvider != nil {
+		hasOtherConnection := false
+		for _, id := range b.connectionMap {
+			if id.Account == toDelete.Account {
+				hasOtherConnection = true
+				break
+			}
+		}
+		if !hasOtherConnection {
+			b.featuresProvider.UnregisterAccount(toDelete.Account)
+		}
 	}
 
 	return nil

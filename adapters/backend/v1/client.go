@@ -26,13 +26,15 @@ type Client struct {
 	callbacks          domain.Callbacks
 	messageProducer    messaging.MessageProducer
 	skipAlertsFrom     []string
+	featuresProvider  *FeaturesProvider
 	maxObjectSizeBytes *int
 }
 
-func NewClient(producer messaging.MessageProducer, skipAlertsFrom []string) *Client {
+func NewClient(producer messaging.MessageProducer, skipAlertsFrom []string, featuresProvider *FeaturesProvider) *Client {
 	return &Client{
 		messageProducer:    producer,
 		skipAlertsFrom:     skipAlertsFrom,
+		featuresProvider:  featuresProvider,
 		maxObjectSizeBytes: getMaxObjectSizeBytes(),
 	}
 }
@@ -328,7 +330,9 @@ func (c *Client) sendPutObjectMessage(ctx context.Context, id domain.KindName, c
 	depth, msgId := utils.DeptMsgIdFromContext(ctx)
 	cId := utils.ClientIdentifierFromContext(ctx)
 
-	if id.Kind.Resource == "runtimealerts" && slices.Contains(c.skipAlertsFrom, cId.Account) {
+	if id.Kind.Resource == resourceRuntimeAlerts &&
+		(slices.Contains(c.skipAlertsFrom, cId.Account) ||
+			(c.featuresProvider != nil && c.featuresProvider.ShouldSkipAlertsFrom(cId.Account))) {
 		logger.L().Debug("skipping put object message for alerts",
 			helpers.String("account", cId.Account),
 			helpers.String("cluster", cId.Cluster),

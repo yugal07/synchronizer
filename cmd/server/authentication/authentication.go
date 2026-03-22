@@ -129,6 +129,7 @@ func AuthenticationServerMiddleware(cfg *config.AuthenticationServerConfig, next
 			CloudProvider:  cloudProvider,
 			GitVersion:     gitVersion,
 		})
+		ctx = context.WithValue(ctx, domain.ContextKeyAccessKey, accessKey)
 
 		// create new request using the new context
 		authenticatedRequest := r.WithContext(ctx)
