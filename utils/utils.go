@@ -56,6 +56,11 @@ func ClientIdentifierFromContext(ctx context.Context) domain.ClientIdentifier {
 	return ctx.Value(domain.ContextKeyClientIdentifier).(domain.ClientIdentifier)
 }
 
+func AccessKeyFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(domain.ContextKeyAccessKey).(string)
+	return v
+}
+
 func DeptMsgIdFromContext(ctx context.Context) (int, string) {
 	depth := ctx.Value(domain.ContextKeyDepth)
 	if depth == nil {
