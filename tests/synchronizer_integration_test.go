@@ -1196,7 +1196,24 @@ func TestSynchronizer_TC09(t *testing.T) {
 	err = td.containers["pulsar"].Start(td.ctx)
 
 	require.NoError(t, err)
-	time.Sleep(10 * time.Second)
+	// Wait for Pulsar to be fully ready by polling the admin API, not just a fixed sleep.
+	// The container restart takes variable time; 10s is often insufficient.
+	err = backoff.RetryNotify(func() error {
+		resp, httpErr := http.Get(td.ingesterConf.Pulsar.AdminUrl + "/admin/v2/clusters")
+		if httpErr != nil {
+			return httpErr
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if !strings.Contains(string(body), `["standalone"]`) {
+			return fmt.Errorf("pulsar not ready yet, response: %s", string(body))
+		}
+		return nil
+	}, backoff.WithMaxRetries(backoff.NewConstantBackOff(3*time.Second), 40), func(err error, d time.Duration) {
+		logger.L().Info("waiting for pulsar to restart", helpers.Error(err), helpers.String("retry in", d.String()))
+	})
+	require.NoError(t, err, "pulsar did not become ready after restart")
+	time.Sleep(10 * time.Second) // allow Pulsar clients to reconnect and reprocess the pending message
 	// check object in postgres
 	_, objFound, err := td.processor.GetObjectFromPostgres(td.clusters[0].account, td.clusters[0].cluster, "spdx.softwarecomposition.kubescape.io/v1beta1/applicationprofiles", namespace, name)
 	assert.NoError(t, err)
