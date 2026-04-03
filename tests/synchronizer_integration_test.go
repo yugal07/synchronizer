@@ -1213,9 +1213,21 @@ func TestSynchronizer_TC09(t *testing.T) {
 		logger.L().Info("waiting for pulsar to restart", helpers.Error(err), helpers.String("retry in", d.String()))
 	})
 	require.NoError(t, err, "pulsar did not become ready after restart")
-	time.Sleep(30 * time.Second) // allow Pulsar clients to reconnect and reprocess the pending message
-	// check object in postgres
-	_, objFound, err := td.processor.GetObjectFromPostgres(td.clusters[0].account, td.clusters[0].cluster, "spdx.softwarecomposition.kubescape.io/v1beta1/applicationprofiles", namespace, name)
+	// Poll for the object to appear in Postgres (up to 60s), giving Pulsar clients time to
+	// reconnect, retransmit the pending message, and allow the ingester to process it.
+	var objFound bool
+	err = backoff.RetryNotify(func() error {
+		_, objFound, err = td.processor.GetObjectFromPostgres(td.clusters[0].account, td.clusters[0].cluster, "spdx.softwarecomposition.kubescape.io/v1beta1/applicationprofiles", namespace, name)
+		if err != nil {
+			return err
+		}
+		if !objFound {
+			return fmt.Errorf("object not yet found in postgres")
+		}
+		return nil
+	}, backoff.WithMaxRetries(backoff.NewConstantBackOff(3*time.Second), 20), func(err error, d time.Duration) {
+		logger.L().Info("waiting for applicationprofile in postgres", helpers.Error(err), helpers.String("retry in", d.String()))
+	})
 	assert.NoError(t, err)
 	assert.True(t, objFound)
 	// tear down
