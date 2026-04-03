@@ -11,6 +11,7 @@ on:
 env:
   DB_MIGRATIONS_GH_USER: ${{ secrets.DB_MIGRATIONS_GH_USER }}
   DB_MIGRATIONS_GH_TOKEN: ${{ secrets.DB_MIGRATIONS_GH_TOKEN }}
+  GIT_LFS_SKIP_SMUDGE: "1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

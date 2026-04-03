@@ -26,6 +26,7 @@ import (
 	postgresconnectordal "github.com/armosec/postgres-connector/dal"
 
 	migration "github.com/armosec/postgres-connector/migration"
+	postgresRouter "github.com/armosec/postgres-connector/router"
 	"github.com/cenkalti/backoff/v4"
 
 	"github.com/kubescape/storage/pkg/apis/softwarecomposition/v1beta1"
@@ -627,8 +628,6 @@ func initIntegrationTest(t *testing.T) *Test {
 	// ingester
 	t.Setenv("CONFIG_FILE", "../configuration/ingester/config.json")
 	ingesterConf := ingesterutils.GetConfig()
-	ingesterConf.Postgres.Host = strings.Split(pgHostPort, ":")[0]
-	ingesterConf.Postgres.Port = strings.Split(pgHostPort, ":")[1]
 	ingesterConf.Pulsar.URL = pulsarUrl
 	ingesterConf.Pulsar.AdminUrl = pulsarAdminUrl
 	rdsCredentials := postgresConnector.PostgresConfig{
@@ -647,10 +646,13 @@ func initIntegrationTest(t *testing.T) *Test {
 		postgresConnector.WithReloadFromFile(rdsFile.Name()),
 		postgresConnector.WithUseDebugConnection(ingesterConf.Logger.Level == "debug"),
 	}
-	ingesterPgClient := postgresConnector.NewPostgresClient(*ingesterConf.Postgres, pgOpts...)
+	ingesterPgClient := postgresConnector.NewPostgresClient(rdsCredentials, pgOpts...)
 	time.Sleep(5 * time.Second)
 	err = ingesterPgClient.Connect()
 	require.NoError(t, err)
+	pgRouter, pgRouterConfig := postgresRouter.NewSinglePostgresRouter(rdsCredentials)
+	pgRouter.SetConnector("default", ingesterPgClient)
+	ingesterConf.PostgresRouterConfig = pgRouterConfig
 	// run migrations
 	err = migration.DbMigrations(ingesterPgClient.GetClient(), migration.HotMigrationsTargetDbVersion)
 	if err != nil {
@@ -675,7 +677,7 @@ func initIntegrationTest(t *testing.T) *Test {
 		nil,
 		ingesters.WithPulsarClient(pulsarClient),
 		ingesters.WithIngesterConfig(ingesterConf.SynchronizerIngesterConfig),
-		ingesters.WithPGConnector(ingesterPgClient),
+		ingesters.WithPGRouter(pgRouter),
 		ingesters.WithContext(ctx),
 		ingesters.WithSynchronizerProducer(ingesterProducer),
 		ingesters.WithOnFinishProducer(onFinishProducer),
