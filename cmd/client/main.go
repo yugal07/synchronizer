@@ -57,7 +57,11 @@ func main() {
 	}
 
 	// synchronizer server URL using service discovery
-	if services, err := config.LoadServiceURLs("/etc/config/services.json"); err != nil {
+	apiURL := os.Getenv("API_URL")
+	if apiURL == "" {
+		apiURL = "api.armosec.io"
+	}
+	if services, err := config.LoadServiceURLs(apiURL); err != nil {
 		logger.L().Warning("failed discovering urls", helpers.Error(err))
 	} else if serverUrl := services.GetSynchronizerUrl(); serverUrl != "" {
 		logger.L().Debug("synchronizer server URL", helpers.String("synchronizer", serverUrl))

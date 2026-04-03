@@ -1,13 +1,15 @@
 package config
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
 	"github.com/armosec/armoapi-go/armotypes"
 	"github.com/armosec/utils-k8s-go/armometadata"
-	"github.com/kubescape/backend/pkg/servicediscovery/schema"
-	v2 "github.com/kubescape/backend/pkg/servicediscovery/v2"
+	v3 "github.com/kubescape/backend/pkg/servicediscovery/v3"
 	pulsarconfig "github.com/kubescape/messaging/pulsar/config"
 	"github.com/kubescape/synchronizer/domain"
 	"github.com/stretchr/testify/assert"
@@ -121,48 +123,28 @@ func TestLoadConfig(t *testing.T) {
 }
 
 func TestLoadServiceURLs(t *testing.T) {
-	tests := []struct {
-		name     string
-		env      map[string]string
-		filePath string
-		want     schema.IBackendServices
-	}{
-		{
-			name:     "via filePath",
-			filePath: "../configuration/services.json",
-			want: &v2.ServicesV2{
-				EventReceiverHttpUrl:      "https://er-test.com",
-				EventReceiverWebsocketUrl: "wss://er-test.com",
-				GatewayUrl:                "https://gw.test.com",
-				ApiServerUrl:              "https://api.test.com",
-				MetricsUrl:                "https://metrics.test.com",
-				SynchronizerUrl:           "ws://127.0.0.1:8080",
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"version": "v3",
+			"response": map[string]string{
+				"event-receiver-http": "https://er-test.com",
+				"api-server":          "https://api.test.com",
+				"metrics":             "https://metrics.test.com",
+				"synchronizer":        "ws://127.0.0.1:8080",
 			},
-		},
-		{
-			name: "via env",
-			env:  map[string]string{"SERVICES": "../configuration/services.json"},
-			want: &v2.ServicesV2{
-				EventReceiverHttpUrl:      "https://er-test.com",
-				EventReceiverWebsocketUrl: "wss://er-test.com",
-				GatewayUrl:                "https://gw.test.com",
-				ApiServerUrl:              "https://api.test.com",
-				MetricsUrl:                "https://metrics.test.com",
-				SynchronizerUrl:           "ws://127.0.0.1:8080",
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			for k, v := range tt.env {
-				err := os.Setenv(k, v)
-				assert.NoError(t, err)
-			}
-			got, err := LoadServiceURLs(tt.filePath)
-			assert.NoError(t, err)
-			assert.Equal(t, tt.want, got)
 		})
-	}
+	}))
+	defer srv.Close()
+
+	got, err := LoadServiceURLs(srv.URL)
+	assert.NoError(t, err)
+	assert.Equal(t, &v3.ServicesV3{
+		EventReceiverHttpUrl: "https://er-test.com",
+		ApiServerUrl:         "https://api.test.com",
+		MetricsUrl:           "https://metrics.test.com",
+		SynchronizerUrl:      "ws://127.0.0.1:8080",
+	}, got)
 }
 
 func TestResource_String(t *testing.T) {
