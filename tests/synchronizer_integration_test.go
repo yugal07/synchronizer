@@ -658,8 +658,17 @@ func initIntegrationTest(t *testing.T) *Test {
 	pgRouter, pgRouterConfig := postgresRouter.NewSinglePostgresRouter(rdsCredentials)
 	pgRouter.SetConnector("default", ingesterPgClient)
 	ingesterConf.PostgresRouterConfig = pgRouterConfig
-	// run migrations
-	err = migration.DbMigrations(ingesterPgClient.GetClient(), migration.HotMigrationsTargetDbVersion)
+	// run migrations with retry to handle transient GitHub API rate limiting
+	// (17 parallel test jobs can hit the rate limit when all fetch migrations simultaneously)
+	jitter := time.Duration(rand.Intn(10000)) * time.Millisecond
+	time.Sleep(jitter)
+	migrationBackoff := backoff.NewExponentialBackOff()
+	migrationBackoff.InitialInterval = 30 * time.Second
+	migrationBackoff.MaxInterval = 5 * time.Minute
+	migrationBackoff.MaxElapsedTime = 15 * time.Minute
+	err = backoff.Retry(func() error {
+		return migration.DbMigrations(ingesterPgClient.GetClient(), migration.HotMigrationsTargetDbVersion)
+	}, migrationBackoff)
 	if err != nil {
 		panic(fmt.Sprintf("failed to run migrations: %v", err))
 	}
