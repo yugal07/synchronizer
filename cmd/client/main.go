@@ -102,6 +102,7 @@ func main() {
 
 	gitVersion, cloudProvider := incluster.GetApiServerGitVersionAndCloudProvider(ctx, k8sApi)
 	clusterUID := incluster.GetClusterUID(ctx, k8sApi)
+	resourceGroup := incluster.GetResourceGroup(ctx, k8sApi)
 
 	// authentication headers
 	version := os.Getenv("RELEASE")
@@ -115,6 +116,7 @@ func main() {
 			core.GitVersionHeader:    {gitVersion},
 			core.CloudProviderHeader: {cloudProvider},
 			core.ClusterUIDHeader:    {clusterUID},
+			core.ResourceGroupHeader: {resourceGroup},
 		}),
 		NetDial: utils.GetDialer(),
 	}
