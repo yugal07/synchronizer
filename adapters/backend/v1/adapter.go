@@ -375,16 +375,18 @@ func (a *Adapter) startKeepalivePeriodicTask(mainCtx context.Context, cfg *confi
 				}
 				i := 0
 				for _, clientId := range a.connectionMap {
-					msg.Clients[i] = messaging.ConnectedClient{
-						Account:             clientId.Account,
-						Cluster:             clientId.Cluster,
-						SynchronizerVersion: clientId.SyncVersion,
-						HelmVersion:         clientId.HelmVersion,
-						ConnectionId:        clientId.ConnectionId,
-						ConnectionTime:      clientId.ConnectionTime,
-						GitVersion:          clientId.GitVersion,
-						CloudProvider:       clientId.CloudProvider,
-					}
+				msg.Clients[i] = messaging.ConnectedClient{
+					Account:             clientId.Account,
+					Cluster:             clientId.Cluster,
+					SynchronizerVersion: clientId.SyncVersion,
+					HelmVersion:         clientId.HelmVersion,
+					ConnectionId:        clientId.ConnectionId,
+					ConnectionTime:      clientId.ConnectionTime,
+					GitVersion:          clientId.GitVersion,
+					CloudProvider:       clientId.CloudProvider,
+					ClusterUID:          clientId.ClusterUID,
+					ResourceGroup:       clientId.ResourceGroup,
+				}
 					i += 1
 				}
 				a.connMapMutex.Unlock()

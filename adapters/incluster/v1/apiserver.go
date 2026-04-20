@@ -3,6 +3,7 @@ package incluster
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kubescape/go-logger"
@@ -12,6 +13,11 @@ import (
 	"github.com/kubescape/k8s-interface/k8sinterface"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+// azureResourceGroupMarker is the path segment that precedes the resource
+// group name inside an Azure-style Kubernetes node providerID, e.g.
+// azure:///subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Compute/...
+const azureResourceGroupMarker = "/resourceGroups/"
 
 func GetApiServerGitVersionAndCloudProvider(ctx context.Context, k8sApi *k8sinterface.KubernetesApi) (string, string) {
 	if k8sApi == nil {
@@ -64,6 +70,53 @@ func getCloudProvider(ctx context.Context, k8sApi *k8sinterface.KubernetesApi) (
 		return "", fmt.Errorf("no nodes found in the cluster")
 	}
 	return clouds.GetCloudProvider(nodeList), nil
+}
+
+// GetResourceGroup returns the Azure resource group hosting the cluster by
+// parsing the providerID of any node (all nodes of an AKS cluster share the
+// same resource group). Returns an empty string for non-Azure clusters or if
+// the information cannot be determined; callers should treat emptiness as
+// "unknown" rather than an error.
+func GetResourceGroup(ctx context.Context, k8sApi *k8sinterface.KubernetesApi) string {
+	if k8sApi == nil {
+		logger.L().Ctx(ctx).Warning("no kubernetes client for ResourceGroup")
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	nodeList, err := k8sApi.KubernetesClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 1})
+	if err != nil {
+		logger.L().Ctx(ctx).Warning("failed to list nodes for ResourceGroup", helpers.Error(err))
+		return ""
+	}
+	if len(nodeList.Items) == 0 {
+		logger.L().Ctx(ctx).Warning("no nodes found in the cluster for ResourceGroup")
+		return ""
+	}
+
+	rg := parseAzureResourceGroup(nodeList.Items[0].Spec.ProviderID)
+	if rg != "" {
+		logger.L().Info("successfully retrieved ResourceGroup", helpers.String("resourceGroup", rg))
+	}
+	return rg
+}
+
+// parseAzureResourceGroup extracts the resource group name from a Kubernetes
+// node providerID using the Azure format documented at
+// https://learn.microsoft.com/azure/aks/ and mirrored by the kubescape
+// node-agent (see kubescape/node-agent/pkg/cloudmetadata.parseAzureResourceGroup).
+func parseAzureResourceGroup(providerID string) string {
+	idx := strings.Index(strings.ToLower(providerID), strings.ToLower(azureResourceGroupMarker))
+	if idx == -1 {
+		return ""
+	}
+	rest := providerID[idx+len(azureResourceGroupMarker):]
+	end := strings.Index(rest, "/")
+	if end == -1 {
+		return rest
+	}
+	return rest[:end]
 }
 
 func getApiServerGitVersion(k8sApi *k8sinterface.KubernetesApi) (string, error) {

@@ -10,4 +10,5 @@ const (
 	GitVersionHeader    = "X-GIT-VERSION"
 	CloudProviderHeader = "X-CLOUD-PROVIDER"
 	ClusterUIDHeader    = "X-CLUSTER-UID"
+	ResourceGroupHeader = "X-RESOURCE-GROUP"
 )

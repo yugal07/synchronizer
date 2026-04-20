@@ -166,4 +166,5 @@ type ConnectedClient struct {
 	GitVersion          string    `json:"gitVersion"`
 	CloudProvider       string    `json:"cloudProvider"`
 	ClusterUID          string    `json:"clusterUID"`
+	ResourceGroup       string    `json:"resourceGroup,omitempty"`
 }

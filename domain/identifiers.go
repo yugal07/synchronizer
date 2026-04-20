@@ -73,6 +73,7 @@ type ClientIdentifier struct {
 	GitVersion     string
 	CloudProvider  string
 	ClusterUID     string
+	ResourceGroup  string
 }
 
 func (c ClientIdentifier) String() string {
