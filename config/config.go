@@ -8,7 +8,7 @@ import (
 	"github.com/armosec/utils-k8s-go/armometadata"
 	"github.com/kubescape/backend/pkg/servicediscovery"
 	"github.com/kubescape/backend/pkg/servicediscovery/schema"
-	v2 "github.com/kubescape/backend/pkg/servicediscovery/v2"
+	v3 "github.com/kubescape/backend/pkg/servicediscovery/v3"
 	pulsarconfig "github.com/kubescape/messaging/pulsar/config"
 	pulsarconnector "github.com/kubescape/messaging/pulsar/connector"
 	"github.com/kubescape/synchronizer/domain"
@@ -127,14 +127,12 @@ func LoadClusterConfig() (armometadata.ClusterConfig, error) {
 	return *clusterConfig, err
 }
 
-func LoadServiceURLs(filePath string) (schema.IBackendServices, error) {
-	pathAndFileName, present := os.LookupEnv("SERVICES")
-	if !present {
-		pathAndFileName = filePath
+func LoadServiceURLs(apiURL string) (schema.IBackendServices, error) {
+	client, err := v3.NewServiceDiscoveryClientV3(apiURL)
+	if err != nil {
+		return nil, err
 	}
-	return servicediscovery.GetServices(
-		v2.NewServiceDiscoveryFileV2(pathAndFileName),
-	)
+	return servicediscovery.GetServices(client)
 }
 
 func (c *InCluster) ValidateConfig() error {

@@ -21,11 +21,13 @@ import (
 	"github.com/apache/pulsar-client-go/pulsar"
 	configserviceconnector "github.com/armosec/event-ingester-service/config_service_connector"
 	"github.com/armosec/event-ingester-service/ingesters"
+	ingesterinterfaces "github.com/armosec/event-ingester-service/ingesters/interfaces"
 	ingesterutils "github.com/armosec/event-ingester-service/utils"
 	postgresConnector "github.com/armosec/postgres-connector"
 	postgresconnectordal "github.com/armosec/postgres-connector/dal"
 
 	migration "github.com/armosec/postgres-connector/migration"
+	postgresRouter "github.com/armosec/postgres-connector/router"
 	"github.com/cenkalti/backoff/v4"
 
 	"github.com/kubescape/storage/pkg/apis/softwarecomposition/v1beta1"
@@ -604,6 +606,10 @@ func (s *csMock) GetOrCreateCluster(_, _ string, _ map[string]string) (*armotype
 	return &armotypes.PortalCluster{}, nil
 }
 
+func (s *csMock) SetSIEMProducer(_ ingesterinterfaces.ISIEMProducer) {
+	// No-op for mock - the producer is not used in tests
+}
+
 func initIntegrationTest(t *testing.T) *Test {
 	ctx := context.TODO()
 
@@ -627,8 +633,6 @@ func initIntegrationTest(t *testing.T) *Test {
 	// ingester
 	t.Setenv("CONFIG_FILE", "../configuration/ingester/config.json")
 	ingesterConf := ingesterutils.GetConfig()
-	ingesterConf.Postgres.Host = strings.Split(pgHostPort, ":")[0]
-	ingesterConf.Postgres.Port = strings.Split(pgHostPort, ":")[1]
 	ingesterConf.Pulsar.URL = pulsarUrl
 	ingesterConf.Pulsar.AdminUrl = pulsarAdminUrl
 	rdsCredentials := postgresConnector.PostgresConfig{
@@ -647,13 +651,16 @@ func initIntegrationTest(t *testing.T) *Test {
 		postgresConnector.WithReloadFromFile(rdsFile.Name()),
 		postgresConnector.WithUseDebugConnection(ingesterConf.Logger.Level == "debug"),
 	}
-	ingesterPgClient := postgresConnector.NewPostgresClient(*ingesterConf.Postgres, pgOpts...)
+	ingesterPgClient := postgresConnector.NewPostgresClient(rdsCredentials, pgOpts...)
 	time.Sleep(5 * time.Second)
 	err = ingesterPgClient.Connect()
 	require.NoError(t, err)
-	// run migrations
-	err = migration.DbMigrations(ingesterPgClient.GetClient(), migration.HotMigrationsTargetDbVersion)
-	if err != nil {
+	pgRouter, pgRouterConfig := postgresRouter.NewSinglePostgresRouter(rdsCredentials)
+	pgRouter.SetConnector("default", ingesterPgClient)
+	ingesterConf.PostgresRouterConfig = pgRouterConfig
+	// run migrations - in CI, LOCAL_FILE_MIGRATION_PATH is set to a local clone of db-migrations,
+	// avoiding GitHub API rate limiting when 17 parallel test jobs run simultaneously.
+	if err = migration.DbMigrations(ingesterPgClient.GetClient(), migration.HotMigrationsTargetDbVersion); err != nil {
 		panic(fmt.Sprintf("failed to run migrations: %v", err))
 	}
 	pulsarClient, err := pulsarconnector.NewClient(
@@ -675,7 +682,7 @@ func initIntegrationTest(t *testing.T) *Test {
 		nil,
 		ingesters.WithPulsarClient(pulsarClient),
 		ingesters.WithIngesterConfig(ingesterConf.SynchronizerIngesterConfig),
-		ingesters.WithPGConnector(ingesterPgClient),
+		ingesters.WithPGRouter(pgRouter),
 		ingesters.WithContext(ctx),
 		ingesters.WithSynchronizerProducer(ingesterProducer),
 		ingesters.WithOnFinishProducer(onFinishProducer),
@@ -718,6 +725,18 @@ func initIntegrationTest(t *testing.T) *Test {
 }
 
 func tearDown(td *Test) {
+	// Cancel all server and client contexts first to allow goroutines to shut down gracefully
+	// before closing the pulsar client. Without this, the pulsar reader goroutine would call
+	// Fatal (os.Exit) when it receives a "consumer closed" error during teardown.
+	for i := range td.syncServers {
+		td.syncServers[i].syncServerContextCancelFn()
+	}
+	for i := range td.clusters {
+		if td.clusters[i].syncClientContextCancelFn != nil {
+			td.clusters[i].syncClientContextCancelFn()
+		}
+	}
+	time.Sleep(100 * time.Millisecond) // allow goroutines to detect context cancellation
 	td.pulsarClient.Close()
 	for _, c := range td.containers {
 		_ = c.Terminate(td.ctx)
@@ -1175,10 +1194,40 @@ func TestSynchronizer_TC09(t *testing.T) {
 	time.Sleep(10 * time.Second)
 	// restart pulsar
 	err = td.containers["pulsar"].Start(td.ctx)
+
 	require.NoError(t, err)
-	time.Sleep(10 * time.Second)
-	// check object in postgres
-	_, objFound, err := td.processor.GetObjectFromPostgres(td.clusters[0].account, td.clusters[0].cluster, "spdx.softwarecomposition.kubescape.io/v1beta1/applicationprofiles", namespace, name)
+	// Wait for Pulsar to be fully ready by polling the admin API, not just a fixed sleep.
+	// The container restart takes variable time; 10s is often insufficient.
+	err = backoff.RetryNotify(func() error {
+		resp, httpErr := http.Get(td.ingesterConf.Pulsar.AdminUrl + "/admin/v2/clusters")
+		if httpErr != nil {
+			return httpErr
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if !strings.Contains(string(body), `["standalone"]`) {
+			return fmt.Errorf("pulsar not ready yet, response: %s", string(body))
+		}
+		return nil
+	}, backoff.WithMaxRetries(backoff.NewConstantBackOff(3*time.Second), 60), func(err error, d time.Duration) {
+		logger.L().Info("waiting for pulsar to restart", helpers.Error(err), helpers.String("retry in", d.String()))
+	})
+	require.NoError(t, err, "pulsar did not become ready after restart")
+	// Poll for the object to appear in Postgres (up to 60s), giving Pulsar clients time to
+	// reconnect, retransmit the pending message, and allow the ingester to process it.
+	var objFound bool
+	err = backoff.RetryNotify(func() error {
+		_, objFound, err = td.processor.GetObjectFromPostgres(td.clusters[0].account, td.clusters[0].cluster, "spdx.softwarecomposition.kubescape.io/v1beta1/applicationprofiles", namespace, name)
+		if err != nil {
+			return err
+		}
+		if !objFound {
+			return fmt.Errorf("object not yet found in postgres")
+		}
+		return nil
+	}, backoff.WithMaxRetries(backoff.NewConstantBackOff(3*time.Second), 20), func(err error, d time.Duration) {
+		logger.L().Info("waiting for applicationprofile in postgres", helpers.Error(err), helpers.String("retry in", d.String()))
+	})
 	assert.NoError(t, err)
 	assert.True(t, objFound)
 	// tear down
