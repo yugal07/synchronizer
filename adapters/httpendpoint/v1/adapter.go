@@ -39,7 +39,7 @@ func NewHTTPEndpointAdapter(cfg config.Config) *Adapter {
 		Addr:              fmt.Sprintf(":%s", cfg.HTTPEndpoint.ServerPort),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      10 * time.Second,
+		WriteTimeout:      35 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		Handler:           httpMux,
 	}
